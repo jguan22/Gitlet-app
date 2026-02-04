@@ -21,7 +21,11 @@ public class Stage implements Serializable {
         removedFiles.add(fileName);
     }
 
-    public void remove(String fileName) {
+    public TreeSet<String> getRemovedFiles() {
+        return removedFiles;
+    }
+
+    public void removeFromAddition(String fileName) {
         addedFiles.remove(fileName);
     }
 

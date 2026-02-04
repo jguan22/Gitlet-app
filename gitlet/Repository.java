@@ -1,9 +1,12 @@
 package gitlet;
 
 import java.io.File;
+
 import static gitlet.Utils.*;
+
 import java.util.TreeMap;
 import java.text.SimpleDateFormat;
+import java.util.List;
 import java.util.Locale;
 
 // TODO: any imports you need here
@@ -80,7 +83,7 @@ public class Repository {
 
         // 3. If file matches HEAD, remove from staging
         if (blobHash.equals(head.getSnapshots().get(fileName))) {
-            stagingArea.remove(fileName);
+            stagingArea.removeFromAddition(fileName);
         } else {
             // Create the blob file in objects folder
             Utils.writeContents(Utils.join(OBJECTS_DIR, blobHash), contents);
@@ -151,6 +154,7 @@ public class Repository {
         stage.save();
     }
 
+    /** Log command */
     public static void log() {
         Commit current = getHeadCommit();
         String currentHash = getHeadHash();
@@ -181,6 +185,77 @@ public class Repository {
                 current = Utils.readObject(join(OBJECTS_DIR, currentHash), Commit.class);
             }
         }
+    }
+
+    /** GlobalLog command */
+    public static void globalLog() {
+        List<String> allObjects = Utils.plainFilenamesIn(OBJECTS_DIR);
+        for (String fileName : allObjects) {
+            // Try to read each file as a Commit; ignore if it's a Blob
+            try {
+                Commit c = Utils.readObject(Utils.join(OBJECTS_DIR, fileName), Commit.class);
+                printCommit(c, fileName);
+            } catch (Exception e) {
+                // Not a commit object, skip it
+            }
+        }
+    }
+
+    /** Find command */
+    public static void find(String message) {
+        List<String> allObjects = Utils.plainFilenamesIn(OBJECTS_DIR);
+        boolean found = false;
+        for (String fileName : allObjects) {
+            try {
+                Commit c = Utils.readObject(Utils.join(OBJECTS_DIR, fileName), Commit.class);
+                if (c.getMessage().equals(message)) {
+                    System.out.println(fileName);
+                    found = true;
+                }
+            } catch (Exception e) { /* Skip non-commit objects */ }
+        }
+        if (!found) {
+            System.out.println("Found no commit with that message.");
+        }
+    }
+
+    /** Status command */
+    public static void status() {
+        if (!GITLET_DIR.exists()) {
+            System.out.println("Not in an initialized Gitlet directory.");
+            return;
+        }
+
+        // 1. Branches
+        System.out.println("=== Branches ===");
+        String currentBranch = getHeadBranchName();
+        List<String> branches = Utils.plainFilenamesIn(HEADS_DIR);
+        for (String b : branches) {
+            if (b.equals(currentBranch)) System.out.print("*");
+            System.out.println(b);
+        }
+        System.out.println();
+
+        // 2. Staged Files
+        System.out.println("=== Staged Files ===");
+        Stage stage = Stage.load();
+        for (String fileName : stage.getAddedFiles().keySet()) {
+            System.out.println(fileName);
+        }
+        System.out.println();
+
+        // 3. Removed Files
+        System.out.println("=== Removed Files ===");
+        for (String fileName : stage.getRemovedFiles()) {
+            System.out.println(fileName);
+        }
+        System.out.println();
+
+        // 4. Placeholder for Extra Credit
+        System.out.println("=== Modifications Not Staged For Commit ===");
+        System.out.println();
+        System.out.println("=== Untracked Files ===");
+        System.out.println();
     }
 
     /** Helper method to get the head */
@@ -227,5 +302,40 @@ public class Repository {
             // Update HEAD directly if detached
             Utils.writeContents(headFile, newCommitHash);
         }
+    }
+
+    /** Returns the name of the branch currently pointed to by HEAD. */
+    private static String getHeadBranchName() {
+        // Read the contents of the HEAD file
+        String headContent = Utils.readContentsAsString(Utils.join(GITLET_DIR, "HEAD"));
+        
+        // headContent looks like "ref: refs/heads/master"
+        if (headContent.startsWith("ref: ")) {
+            // Find the last index of the slash to get just "master"
+            String[] pathParts = headContent.split("/");
+            return pathParts[pathParts.length - 1];
+        } else {
+            // If HEAD contains a raw SHA-1 hash (detached state)
+            return "detached";
+        }
+    }
+
+    /** Prints a commit in the format specified by the 'log' command. */
+    private static void printCommit(Commit c, String hash) {
+        System.out.println("===");
+        System.out.println("commit " + hash);
+
+        // Only print 'Merge:' line if it has a second parent
+        if (c.isMergeCommit()) {
+            System.out.printf("Merge: %s %s%n", 
+                c.getParent().substring(0, 7), 
+                c.getSecondParent().substring(0, 7));
+        }
+
+        // Format: Thu Nov 9 20:00:05 2017 -0800
+        SimpleDateFormat sdf = new SimpleDateFormat("EEE MMM d HH:mm:ss yyyy Z", Locale.US);
+        System.out.println("Date: " + sdf.format(c.getTimestamp()));
+        System.out.println(c.getMessage());
+        System.out.println();
     }
 }
