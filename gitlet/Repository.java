@@ -3,6 +3,8 @@ package gitlet;
 import java.io.File;
 import static gitlet.Utils.*;
 import java.util.TreeMap;
+import java.text.SimpleDateFormat;
+import java.util.Locale;
 
 // TODO: any imports you need here
 
@@ -120,6 +122,65 @@ public class Repository {
         // Clear the stage for the next round
         stage.clear();
         stage.save();
+    }
+
+    /** Remove command */
+    public static void rm(String fileName) {
+        Stage stage = Stage.load();
+        Commit head = getHeadCommit();
+        boolean isStaged = stage.getAddedFiles().containsKey(fileName);
+        boolean isTracked = head.getSnapshots().containsKey(fileName);
+
+        if (!isStaged && !isTracked) {
+            System.out.println("No reason to remove the file.");
+            return;
+        }
+
+        // 1. Unstage if it's currently staged for addition
+        if (isStaged) {
+            stage.remove(fileName);
+        }
+
+        // 2. If tracked in the current commit, stage for removal
+        if (isTracked) {
+            stage.stageForRemoval(fileName);
+            // Use restrictedDelete to remove from Working Directory
+            Utils.restrictedDelete(join(CWD, fileName));
+        }
+
+        stage.save();
+    }
+
+    public static void log() {
+        Commit current = getHeadCommit();
+        String currentHash = getHeadHash();
+
+        while (current != null) {
+            System.out.println("===");
+            System.out.println("commit " + currentHash);
+            
+            // For Merges (Optional for now, but good to have)
+            if (current.isMergeCommit()) {
+                System.out.printf("Merge: %s %s%n", 
+                    current.getParent().substring(0, 7), 
+                    current.getSecondParent().substring(0, 7));
+            }
+
+            // Format: Thu Nov 9 20:00:05 2017 -0800
+            // Using "EEE MMM d HH:mm:ss yyyy Z" pattern
+            SimpleDateFormat sdf = new SimpleDateFormat("EEE MMM d HH:mm:ss yyyy Z", Locale.US);
+            System.out.println("Date: " + sdf.format(current.getTimestamp()));
+            System.out.println(current.getMessage());
+            System.out.println();
+
+            // Move to the parent
+            currentHash = current.getParent();
+            if (currentHash == null) {
+                current = null;
+            } else {
+                current = Utils.readObject(join(OBJECTS_DIR, currentHash), Commit.class);
+            }
+        }
     }
 
     /** Helper method to get the head */

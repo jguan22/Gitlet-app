@@ -4,16 +4,21 @@ import java.io.File;
 import java.io.Serializable;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.TreeSet;
 
 public class Stage implements Serializable {
     /** Map of fileName -> blob SHA-1 for addition */
     private TreeMap<String, String> addedFiles = new TreeMap<>();
     /** Set of files to be removed (for the 'rm' command) */
-    private TreeMap<String, String> removedFiles = new TreeMap<>();
+    private TreeSet<String> removedFiles = new TreeSet<>();
 
     public void add(String fileName, String blobHash) {
         addedFiles.put(fileName, blobHash);
         removedFiles.remove(fileName); // Undo a removal if staged for addition
+    }
+
+    public void stageForRemoval(String fileName) {
+        removedFiles.add(fileName);
     }
 
     public void remove(String fileName) {

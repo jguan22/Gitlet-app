@@ -25,10 +25,10 @@ public class Commit implements Serializable {
     /** The message of this Commit. */
     private String message;
     private String parent;
+    private String secondParent;
     private java.util.Date timestamp;
     private TreeMap<String, String> snapshots;
 
-    /* TODO: fill in the rest of this class. */
     public Commit(String message, String parent, TreeMap<String, String> snapshots) {
         this.message = message;
         this.parent = parent;
@@ -36,8 +36,20 @@ public class Commit implements Serializable {
         this.timestamp = (parent == null) ? new java.util.Date(0) : new java.util.Date();
     }
 
+    public String getMessage() { return message; }
+
+    public String getParent() { return parent; }
+
+    public String getSecondParent() { return secondParent; }
+
+    public java.util.Date getTimestamp() { return timestamp; }
+
     public Map<String, String> getSnapshots() {
         return Collections.unmodifiableMap(snapshots);
+    }
+
+    public boolean isMergeCommit() {
+        return secondParent != null;
     }
 
     /** Returns the SHA-1 hash of this commit object. */
