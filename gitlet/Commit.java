@@ -1,8 +1,11 @@
 package gitlet;
 
 // TODO: any imports you need here
-
-import java.util.Date; // TODO: You'll likely use this in this class
+import java.io.File;
+import java.io.Serializable;
+import java.util.Collections;
+import java.util.Map;
+import java.util.TreeMap;
 
 /** Represents a gitlet commit object.
  *  TODO: It's a good idea to give a description here of what else this Class
@@ -10,7 +13,7 @@ import java.util.Date; // TODO: You'll likely use this in this class
  *
  *  @author TODO
  */
-public class Commit {
+public class Commit implements Serializable {
     /**
      * TODO: add instance variables here.
      *
@@ -21,6 +24,33 @@ public class Commit {
 
     /** The message of this Commit. */
     private String message;
+    private String parent;
+    private java.util.Date timestamp;
+    private TreeMap<String, String> snapshots;
 
     /* TODO: fill in the rest of this class. */
+    public Commit(String message, String parent, TreeMap<String, String> snapshots) {
+        this.message = message;
+        this.parent = parent;
+        this.snapshots = snapshots;
+        this.timestamp = (parent == null) ? new java.util.Date(0) : new java.util.Date();
+    }
+
+    public Map<String, String> getSnapshots() {
+        return Collections.unmodifiableMap(snapshots);
+    }
+
+    /** Returns the SHA-1 hash of this commit object. */
+    public String getHash() {
+        // We serialize the entire commit object to bytes, then hash those bytes
+        return Utils.sha1((Object) Utils.serialize(this));
+    }
+
+    /** Saves this commit to the objects directory. */
+    public void save() {
+        String hash = getHash();
+        // The filename is the SHA-1 hash
+        File commitFile = Utils.join(Repository.OBJECTS_DIR, hash);
+        Utils.writeObject(commitFile, this);
+    }
 }
