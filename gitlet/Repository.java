@@ -1,13 +1,22 @@
 package gitlet;
 
 import java.io.File;
-
-import static gitlet.Utils.*;
-
-import java.util.TreeMap;
 import java.text.SimpleDateFormat;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.TreeMap;
+
+import static gitlet.Utils.join;
+import static gitlet.Utils.plainFilenamesIn;
+import static gitlet.Utils.readContents;
+import static gitlet.Utils.readContentsAsString;
+import static gitlet.Utils.readObject;
+import static gitlet.Utils.restrictedDelete;
+import static gitlet.Utils.serialize;
+import static gitlet.Utils.sha1;
+import static gitlet.Utils.writeContents;
+import static gitlet.Utils.writeObject;
 
 // TODO: any imports you need here
 
@@ -141,7 +150,7 @@ public class Repository {
 
         // 1. Unstage if it's currently staged for addition
         if (isStaged) {
-            stage.remove(fileName);
+            stage.removeFromAddition(fileName);
         }
 
         // 2. If tracked in the current commit, stage for removal
@@ -258,6 +267,78 @@ public class Repository {
         System.out.println();
     }
 
+    /** Checkout command 1: checkout -- [file name] */
+    public static void checkoutFile(String fileName) {
+        checkoutFileFromCommit(getHeadHash(), fileName);
+    }
+
+    /** Checkout command 2: checkout [commit id] -- [file name] */
+    public static void checkoutFileFromCommit(String commitId, String fileName) {
+        // Handle shortened IDs (prefix search)
+        String fullHash = findFullHash(commitId);
+        if (fullHash == null) {
+            System.out.println("No commit with that id exists.");
+            return;
+        }
+
+        File commitFile = join(OBJECTS_DIR, fullHash);
+        Commit c = readObject(commitFile, Commit.class);
+
+        if (!c.getSnapshots().containsKey(fileName)) {
+            System.out.println("File does not exist in that commit.");
+            return;
+        }
+
+        // Get the blob hash and write its contents to the CWD
+        String blobHash = c.getSnapshots().get(fileName);
+        byte[] contents = readContents(join(OBJECTS_DIR, blobHash));
+        writeContents(join(CWD, fileName), contents);
+    }
+
+    /** Checkout command 3: checkout [branchname] */
+    public static void checkoutBranch(String branchName) {
+        File branchFile = join(HEADS_DIR, branchName);
+        if (!branchFile.exists()) {
+            System.out.println("No such branch exists.");
+            return;
+        }
+        if (branchName.equals(getHeadBranchName())) {
+            System.out.println("No need to checkout the current branch.");
+            return;
+        }
+
+        String targetCommitHash = readContentsAsString(branchFile);
+        Commit targetCommit = readObject(join(OBJECTS_DIR, targetCommitHash), Commit.class);
+        Commit currentCommit = getHeadCommit();
+
+        // Safety Check: Overwriting untracked files
+        List<String> cwdFiles = plainFilenamesIn(CWD);
+        for (String file : cwdFiles) {
+            if (!currentCommit.getSnapshots().containsKey(file) && targetCommit.getSnapshots().containsKey(file)) {
+                System.out.println("There is an untracked file in the way; delete it, or add and commit it first.");
+                return;
+            }
+        }
+
+        // 1. Delete files tracked in current but NOT in target
+        for (String fileName : currentCommit.getSnapshots().keySet()) {
+            if (!targetCommit.getSnapshots().containsKey(fileName)) {
+                restrictedDelete(join(CWD, fileName));
+            }
+        }
+
+        // 2. Write all files from target commit to CWD
+        for (Map.Entry<String, String> entry : targetCommit.getSnapshots().entrySet()) {
+            byte[] contents = readContents(join(OBJECTS_DIR, entry.getValue()));
+            writeContents(join(CWD, entry.getKey()), contents);
+        }
+
+        // 3. Update HEAD and clear Stage
+        writeContents(join(GITLET_DIR, "HEAD"), "ref: refs/heads/" + branchName);
+        Stage stage = new Stage(); // Clear the staging area
+        stage.save();
+    }
+
     /** Helper method to get the head */
     public static Commit getHeadCommit() {
         // 1. Read the HEAD file to see which branch we are on
@@ -337,5 +418,15 @@ public class Repository {
         System.out.println("Date: " + sdf.format(c.getTimestamp()));
         System.out.println(c.getMessage());
         System.out.println();
+    }
+
+    /** Prefix matching. */
+    private static String findFullHash(String prefix) {
+        if (prefix.length() == 40) return prefix;
+        List<String> allObjects = plainFilenamesIn(OBJECTS_DIR);
+        for (String hash : allObjects) {
+            if (hash.startsWith(prefix)) return hash;
+        }
+        return null;
     }
 }
