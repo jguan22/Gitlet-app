@@ -12,7 +12,6 @@ import static gitlet.Utils.plainFilenamesIn;
 import static gitlet.Utils.readContents;
 import static gitlet.Utils.readContentsAsString;
 import static gitlet.Utils.readObject;
-import static gitlet.Utils.restrictedDelete;
 import static gitlet.Utils.serialize;
 import static gitlet.Utils.sha1;
 import static gitlet.Utils.writeContents;
@@ -307,38 +306,84 @@ public class Repository {
             return;
         }
 
+        // Load the target commit
         String targetCommitHash = readContentsAsString(branchFile);
         Commit targetCommit = readObject(join(OBJECTS_DIR, targetCommitHash), Commit.class);
-        Commit currentCommit = getHeadCommit();
 
-        // Safety Check: Overwriting untracked files
-        List<String> cwdFiles = plainFilenamesIn(CWD);
-        for (String file : cwdFiles) {
-            if (!currentCommit.getSnapshots().containsKey(file) && targetCommit.getSnapshots().containsKey(file)) {
-                System.out.println("There is an untracked file in the way; delete it, or add and commit it first.");
-                return;
-            }
-        }
+        // Handle the file swapping
+        restoreSnapshot(targetCommit);
 
-        // 1. Delete files tracked in current but NOT in target
-        for (String fileName : currentCommit.getSnapshots().keySet()) {
-            if (!targetCommit.getSnapshots().containsKey(fileName)) {
-                restrictedDelete(join(CWD, fileName));
-            }
-        }
-
-        // 2. Write all files from target commit to CWD
-        for (Map.Entry<String, String> entry : targetCommit.getSnapshots().entrySet()) {
-            byte[] contents = readContents(join(OBJECTS_DIR, entry.getValue()));
-            writeContents(join(CWD, entry.getKey()), contents);
-        }
-
-        // 3. Update HEAD and clear Stage
+        // Update the HEAD pointer to point to the new branch
         writeContents(join(GITLET_DIR, "HEAD"), "ref: refs/heads/" + branchName);
-        Stage stage = new Stage(); // Clear the staging area
+        
+        // Clear and save the staging area
+        Stage stage = new Stage(); 
         stage.save();
     }
 
+    /** Branch command */
+    public static void branch(String branchName) {
+        // 1. Setup the path to the new branch file
+        File newBranchFile = Utils.join(HEADS_DIR, branchName);
+
+        // 2. Failure Case: Check if it already exists
+        if (newBranchFile.exists()) {
+            System.out.println("A branch with that name already exists.");
+            return;
+        }
+
+        // 3. Get the hash of the current HEAD commit
+        String headHash = getHeadHash();
+
+        // 4. Create the branch by writing the hash to the new file
+        Utils.writeContents(newBranchFile, headHash);
+    }
+
+    /** Remove branch command */
+    public static void rmBranch(String branchName) {
+        // 1. Check if we are trying to delete the current branch
+        if (branchName.equals(getHeadBranchName())) {
+            System.out.println("Cannot remove the current branch.");
+            return;
+        }
+
+        // 2. Locate the branch file in refs/heads/
+        File branchFile = Utils.join(HEADS_DIR, branchName);
+
+        // 3. Failure Case: Branch doesn't exist
+        if (!branchFile.exists()) {
+            System.out.println("A branch with that name does not exist.");
+            return;
+        }
+
+        // 4. Delete the pointer file
+        branchFile.delete();
+    }
+
+    /** Reset command */
+    public static void reset(String commitId) {
+        // 1. Find the full hash (handles abbreviated IDs)
+        String fullHash = findFullHash(commitId);
+        if (fullHash == null) {
+            System.out.println("No commit with that id exists.");
+            return;
+        }
+
+        // 2. Load the target commit
+        Commit targetCommit = Utils.readObject(Utils.join(OBJECTS_DIR, fullHash), Commit.class);
+        
+        // 3. Reuse the "Untracked File" and "File Restoration" logic
+        // This is the same logic used in checkout branch
+        restoreSnapshot(targetCommit); 
+
+        // 4. Move the current branch pointer to this commit
+        updateBranchPointer(fullHash);
+
+        // 5. Clear the staging area
+        Stage stage = new Stage();
+        stage.save();
+    }
+    
     /** Helper method to get the head */
     public static Commit getHeadCommit() {
         // 1. Read the HEAD file to see which branch we are on
@@ -413,7 +458,6 @@ public class Repository {
                 c.getSecondParent().substring(0, 7));
         }
 
-        // Format: Thu Nov 9 20:00:05 2017 -0800
         SimpleDateFormat sdf = new SimpleDateFormat("EEE MMM d HH:mm:ss yyyy Z", Locale.US);
         System.out.println("Date: " + sdf.format(c.getTimestamp()));
         System.out.println(c.getMessage());
@@ -428,5 +472,36 @@ public class Repository {
             if (hash.startsWith(prefix)) return hash;
         }
         return null;
+    }
+
+    /** A helper that synchronizes the Working Directory with a target commit. */
+    private static void restoreSnapshot(Commit targetCommit) {
+        Commit currentCommit = getHeadCommit();
+        List<String> cwdFiles = Utils.plainFilenamesIn(CWD);
+
+        // 1. Safety Check: Is there an untracked file that would be overwritten
+        for (String file : cwdFiles) {
+            // If file is NOT tracked by current commit BUT IS tracked by target commit
+            if (!currentCommit.getSnapshots().containsKey(file) 
+                && targetCommit.getSnapshots().containsKey(file)) {
+                System.out.println("There is an untracked file in the way; delete it, or add and commit it first.");
+                System.exit(0);
+            }
+        }
+
+        // 2. Delete files tracked in current but NOT in target
+        for (String fileName : currentCommit.getSnapshots().keySet()) {
+            if (!targetCommit.getSnapshots().containsKey(fileName)) {
+                Utils.restrictedDelete(Utils.join(CWD, fileName));
+            }
+        }
+
+        // 3. Write all files from target commit to CWD
+        for (Map.Entry<String, String> entry : targetCommit.getSnapshots().entrySet()) {
+            String fileName = entry.getKey();
+            String blobHash = entry.getValue();
+            byte[] contents = Utils.readContents(Utils.join(OBJECTS_DIR, blobHash));
+            Utils.writeContents(Utils.join(CWD, fileName), contents);
+        }
     }
 }
