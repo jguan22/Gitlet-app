@@ -52,6 +52,10 @@ public class Commit implements Serializable {
         return secondParent != null;
     }
 
+    public void setSecondParent(String hash) {
+        this.secondParent = hash;
+    }
+
     /** Returns the SHA-1 hash of this commit object. */
     public String getHash() {
         // We serialize the entire commit object to bytes, then hash those bytes

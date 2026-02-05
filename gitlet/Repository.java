@@ -2,9 +2,14 @@ package gitlet;
 
 import java.io.File;
 import java.text.SimpleDateFormat;
+import java.util.HashSet;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Queue;
+import java.util.Set;
 import java.util.TreeMap;
 
 import static gitlet.Utils.join;
@@ -17,22 +22,13 @@ import static gitlet.Utils.sha1;
 import static gitlet.Utils.writeContents;
 import static gitlet.Utils.writeObject;
 
-// TODO: any imports you need here
-
 /** Represents a gitlet repository.
  *  TODO: It's a good idea to give a description here of what else this Class
  *  does at a high level.
  *
- *  @author TODO
+ *  @author Jiehao Guan
  */
 public class Repository {
-    /**
-     * TODO: add instance variables here.
-     *
-     * List all instance variables of the Repository class here with a useful
-     * comment above them describing what that variable represents and how that
-     * variable is used. We've provided two examples for you.
-     */
 
     /** The current working directory. */
     public static final File CWD = new File(System.getProperty("user.dir"));
@@ -47,7 +43,7 @@ public class Repository {
     public static void init() {
         if (GITLET_DIR.exists()) {
             System.out.println("A Gitlet version-control system already exists in the current directory.");
-            return;
+            System.exit(0);
         }
 
         // Create directory structure
@@ -383,6 +379,65 @@ public class Repository {
         Stage stage = new Stage();
         stage.save();
     }
+
+    /** Merge command */
+    public static void merge(String branchName) {
+        // 1. Validation (Staged changes, branch existence, etc.)
+        validateMerge(branchName);
+
+        String givenHash = readContentsAsString(join(HEADS_DIR, branchName));
+        String headHash = getHeadHash();
+        String splitHash = findSplitPoint(headHash, givenHash);
+
+        // 2. Special Cases: Fast-forward or Ancestor
+        if (splitHash.equals(givenHash)) {
+            System.out.println("Given branch is an ancestor of the current branch.");
+            return;
+        }
+        if (splitHash.equals(headHash)) {
+            checkoutBranch(branchName);
+            System.out.println("Current branch fast-forwarded.");
+            return;
+        }
+
+        // 3. Collect all unique filenames across the three commits
+        Commit split = getCommitFromHash(splitHash);
+        Commit head = getCommitFromHash(headHash);
+        Commit given = getCommitFromHash(givenHash);
+        Set<String> allFiles = new HashSet<>();
+        allFiles.addAll(split.getSnapshots().keySet());
+        allFiles.addAll(head.getSnapshots().keySet());
+        allFiles.addAll(given.getSnapshots().keySet());
+
+        boolean conflictOccurred = false;
+
+        for (String file : allFiles) {
+            String sHash = split.getSnapshots().get(file);
+            String hHash = head.getSnapshots().get(file);
+            String gHash = given.getSnapshots().get(file);
+
+            // Case 1 & 5: Modified in given only, or added in given only
+            if (Objects.equals(sHash, hHash) && !Objects.equals(sHash, gHash)) {
+                if (gHash == null) {
+                    rm(file); // Case 6: Removed in given, unmodified in head
+                } else {
+                    checkoutFileFromCommit(givenHash, file);
+                    add(file);
+                }
+            }
+            // Case 8: Conflict logic
+            else if (!Objects.equals(sHash, hHash) && !Objects.equals(sHash, gHash) 
+                    && !Objects.equals(hHash, gHash)) {
+                handleConflict(file, hHash, gHash);
+                conflictOccurred = true;
+            }
+            // Other cases: No action needed (Keep current version)
+        }
+
+        // 4. Finalize the Merge Commit
+        String msg = "Merged " + branchName + " into " + getHeadBranchName() + ".";
+        finishMergeCommit(msg, headHash, givenHash, conflictOccurred);
+    }
     
     /** Helper method to get the head */
     public static Commit getHeadCommit() {
@@ -502,6 +557,128 @@ public class Repository {
             String blobHash = entry.getValue();
             byte[] contents = Utils.readContents(Utils.join(OBJECTS_DIR, blobHash));
             Utils.writeContents(Utils.join(CWD, fileName), contents);
+        }
+    }
+    
+    /** Find latest common ancestor using BFS */
+    private static String findSplitPoint(String currentHash, String givenHash) {
+        Set<String> ancestorsOfCurrent = new HashSet<>();
+        Queue<String> q = new LinkedList<>();
+        
+        // 1. Traverse all ancestors of current branch and store in a Set
+        q.add(currentHash);
+        while (!q.isEmpty()) {
+            String curr = q.poll();
+            if (curr != null && ancestorsOfCurrent.add(curr)) {
+                Commit c = getCommitFromHash(curr);
+                q.add(c.getParent());
+                if (c.getSecondParent() != null) q.add(c.getSecondParent());
+            }
+        }
+
+        // 2. Traverse ancestors of given branch; the first one found in the Set is the LCA
+        q.add(givenHash);
+        while (!q.isEmpty()) {
+            String curr = q.poll();
+            if (ancestorsOfCurrent.contains(curr)) return curr;
+            Commit c = getCommitFromHash(curr);
+            if (c.getParent() != null) q.add(c.getParent());
+            if (c.getSecondParent() != null) q.add(c.getSecondParent());
+        }
+        return null;
+    }
+
+    /** Helper method to load a Commit object from the objects directory */
+    private static Commit getCommitFromHash(String hash) {
+        if (hash == null) {
+            return null;
+        }
+        File commitFile = Utils.join(OBJECTS_DIR, hash);
+        if (!commitFile.exists()) {
+            return null;
+        }
+        return Utils.readObject(commitFile, Commit.class);
+    }
+
+    private static void finishMergeCommit(String msg, String headHash, String givenHash, boolean conflict) {
+        // 1. Load the current state
+        Commit head = getHeadCommit();
+        Stage stage = Stage.load();
+        
+        // 2. Prepare the new snapshot
+        // Start with the current HEAD's files and apply staged changes
+        TreeMap<String, String> newSnapshots = new TreeMap<>(head.getSnapshots());
+        newSnapshots.putAll(stage.getAddedFiles());
+        for (String fileName : stage.getRemovedFiles()) {
+            newSnapshots.remove(fileName);
+        }
+
+        // 3. Create and save the Merge Commit
+        Commit mergeCommit = new Commit(msg, headHash, newSnapshots);
+        mergeCommit.setSecondParent(givenHash); // Link the second branch!
+        mergeCommit.save();
+
+        // 4. Update the current branch pointer to this new commit
+        String currentBranch = getHeadBranchName();
+        Utils.writeContents(Utils.join(HEADS_DIR, currentBranch), mergeCommit.getHash());
+
+        // 5. Clean up
+        stage.clear();
+        stage.save();
+
+        if (conflict) {
+            System.out.println("Encountered a merge conflict.");
+        }
+    }
+
+    /** Construct the file content when conflicts occur */
+    private static void handleConflict(String fileName, String currentBlob, String givenBlob) {
+        String headContent = (currentBlob == null) ? "" : Utils.readContentsAsString(join(OBJECTS_DIR, currentBlob));
+        String givenContent = (givenBlob == null) ? "" : Utils.readContentsAsString(join(OBJECTS_DIR, givenBlob));
+
+        String conflictText = "<<<<<<< HEAD\n" + headContent + "=======\n" + givenContent + ">>>>>>>\n";
+        Utils.writeContents(join(CWD, fileName), conflictText);
+        
+        // Always stage the conflict result
+        Stage stage = Stage.load();
+        stage.add(fileName, Utils.sha1(conflictText)); 
+        stage.save();
+    }
+
+    private static void validateMerge(String branchName) {
+        // 1. Check for staged additions or removals
+        Stage stage = Stage.load();
+        if (!stage.getAddedFiles().isEmpty() || !stage.getRemovedFiles().isEmpty()) {
+            System.out.println("You have uncommitted changes.");
+            System.exit(0);
+        }
+
+        // 2. Check if the branch exists
+        File branchFile = Utils.join(HEADS_DIR, branchName);
+        if (!branchFile.exists()) {
+            System.out.println("A branch with that name does not exist.");
+            System.exit(0);
+        }
+
+        // 3. Check for merging a branch with itself
+        if (branchName.equals(getHeadBranchName())) {
+            System.out.println("Cannot merge a branch with itself.");
+            System.exit(0);
+        }
+
+        // 4. Untracked file check (safety first!)
+        String givenHash = Utils.readContentsAsString(branchFile);
+        Commit givenCommit = getCommitFromHash(givenHash);
+        Commit headCommit = getHeadCommit();
+        
+        List<String> cwdFiles = Utils.plainFilenamesIn(CWD);
+        for (String file : cwdFiles) {
+            // If file is untracked in current but tracked in the branch we're merging in
+            if (!headCommit.getSnapshots().containsKey(file) 
+                && givenCommit.getSnapshots().containsKey(file)) {
+                System.out.println("There is an untracked file in the way; delete it, or add and commit it first.");
+                System.exit(0);
+            }
         }
     }
 }
